@@ -1,41 +1,66 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from datetime import datetime
-import sys
+# SILVER LAYER — Healthcare Data Cleaning
 
-sys.path.append("/opt/airflow/scripts")
+from pyspark.sql.functions import col, when
 
-from extract_orders_api import extract_orders
-from validate_orders import validate_orders
-from log_ingestion_metadata import log_ingestion_metadata
+# Read from Bronze table
+df = spark.table("my_catalog.dbo.bronze_diabetic_raw")
 
-default_args = {
-    "owner": "deepak",
-    "retries": 2
-}
+print("Bronze Row Count:", df.count())
 
-with DAG(
-    dag_id="ecommerce_orders_ingestion",
-    start_date=datetime(2024, 1, 1),
-    schedule_interval="@daily",
-    catchup=False,
-    default_args=default_args,
-    tags=["ecommerce", "ingestion", "production-style"]
-) as dag:
+# ---------------------------
+# 1️⃣ Remove Duplicate Encounters
+# ---------------------------
+df = df.dropDuplicates(["encounter_id"])
 
-    extract_task = PythonOperator(
-        task_id="extract_orders",
-        python_callable=extract_orders
-    )
+# ---------------------------
+# 2️⃣ Handle Missing Values
+# ---------------------------
+df = df.fillna({
+    "race": "Unknown",
+    "diag_1": "Unknown",
+    "diag_2": "Unknown",
+    "diag_3": "Unknown"
+})
 
-    validate_task = PythonOperator(
-        task_id="validate_orders",
-        python_callable=validate_orders
-    )
+# ---------------------------
+# 3️⃣ Convert Readmission → Numeric Flag
+# ---------------------------
+df = df.withColumn(
+    "readmitted_flag",
+    when(col("readmitted") == "NO", 0).otherwise(1)
+)
 
-    metadata_task = PythonOperator(
-        task_id="log_ingestion_metadata",
-        python_callable=log_ingestion_metadata
-    )
+# ---------------------------
+# 4️⃣ Age Bucket Feature
+# ---------------------------
+df = df.withColumn(
+    "age_group",
+    when(col("age").contains("0-10"), 0)
+    .when(col("age").contains("10-20"), 1)
+    .when(col("age").contains("20-30"), 2)
+    .when(col("age").contains("30-40"), 3)
+    .when(col("age").contains("40-50"), 4)
+    .when(col("age").contains("50-60"), 5)
+    .when(col("age").contains("60-70"), 6)
+    .when(col("age").contains("70-80"), 7)
+    .when(col("age").contains("80-90"), 8)
+    .otherwise(9)
+)
 
-    extract_task >> validate_task >> metadata_task
+# ---------------------------
+# 5️⃣ Length of Stay Category
+# ---------------------------
+df = df.withColumn(
+    "los_bucket",
+    when(col("time_in_hospital") <= 3, "Short")
+    .when(col("time_in_hospital") <= 7, "Medium")
+    .otherwise("Long")
+)
+
+print("Silver Ready Row Count:", df.count())
+
+display(df)
+
+df.write.format("delta") \
+    .mode("overwrite") \
+    .saveAsTable("my_catalog.dbo.silver_diabetic_clean")

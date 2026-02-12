@@ -1,41 +1,25 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from datetime import datetime
-import sys
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.classification import LogisticRegression
 
-sys.path.append("/opt/airflow/scripts")
+df = spark.read.table("my_catalog.dbo.gold_patient_features")
 
-from extract_orders_api import extract_orders
-from validate_orders import validate_orders
-from log_ingestion_metadata import log_ingestion_metadata
+assembler = VectorAssembler(
+    inputCols=[
+        "total_encounters",
+        "total_meds",
+        "total_inpatient_visits",
+        "total_hospital_days"
+    ],
+    outputCol="features"
+)
 
-default_args = {
-    "owner": "deepak",
-    "retries": 2
-}
+ml_df = assembler.transform(df).select("features", "readmit_count")
 
-with DAG(
-    dag_id="ecommerce_orders_ingestion",
-    start_date=datetime(2024, 1, 1),
-    schedule_interval="@daily",
-    catchup=False,
-    default_args=default_args,
-    tags=["ecommerce", "ingestion", "production-style"]
-) as dag:
+lr = LogisticRegression(
+    labelCol="readmit_count",
+    featuresCol="features"
+)
 
-    extract_task = PythonOperator(
-        task_id="extract_orders",
-        python_callable=extract_orders
-    )
+model = lr.fit(ml_df)
 
-    validate_task = PythonOperator(
-        task_id="validate_orders",
-        python_callable=validate_orders
-    )
-
-    metadata_task = PythonOperator(
-        task_id="log_ingestion_metadata",
-        python_callable=log_ingestion_metadata
-    )
-
-    extract_task >> validate_task >> metadata_task
+print("Accuracy:", model.summary.accuracy)

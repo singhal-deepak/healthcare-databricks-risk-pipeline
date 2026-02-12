@@ -1,11 +1,15 @@
-# Databricks Bronze Layer Ingestion
+file_path = "/Volumes/my_catalog/dbo/welcome/diabetic_data.csv"
 
-df = spark.read.csv(
-    "/FileStore/tables/patient_data.csv",
-    header=True,
-    inferSchema=True
-)
 
-df.write.format("delta").mode("overwrite").saveAsTable("bronze_patient_raw")
+df = spark.read.format("csv") \
+    .option("header", "true") \
+    .option("inferSchema", "true") \
+    .load(file_path)
 
-print("Bronze table created successfully")
+display(df)
+
+spark.sql("DROP TABLE IF EXISTS my_catalog.dbo.bronze_diabetic_raw")
+
+df.write.format("delta") \
+    .mode("overwrite") \
+    .saveAsTable("my_catalog.dbo.bronze_diabetic_raw")
